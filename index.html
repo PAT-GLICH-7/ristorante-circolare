@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>[hidden]{display:none!important}</style>
+<title>Ristorante circolare 3D</title>
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: full-bleed WebGL scene, controls float at the edges. Single dark look by choice. */
+:root{
+  --bg:#0f0d0b; --panel:rgba(20,17,14,.78); --line:rgba(243,236,226,.16);
+  --fg:#f3ece2; --muted:#b4a796; --accent:#f2b544; --glass:#9fd0df;
+  --display:'Manrope',system-ui,sans-serif; --mono:'JetBrains Mono',ui-monospace,monospace;
+  color-scheme:dark;
+}
+html,body{height:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--display);overflow:hidden;margin:0}
+#stage{position:fixed;inset:0;touch-action:none;cursor:grab}
+#stage:active{cursor:grabbing}
+canvas{display:block}
+.hud{position:fixed;z-index:2;background:var(--panel);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:10px}
+#title{top:calc(16px + env(safe-area-inset-top,0px));left:16px;padding:14px 16px;max-width:300px;display:flex;flex-direction:column;gap:6px}
+#title .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--muted)}
+#title h1{margin:0;font-size:22px;font-weight:800;line-height:1.1;text-wrap:balance}
+#title p{margin:0;font-size:13px;line-height:1.45;color:var(--muted)}
+#views{bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);padding:6px;display:flex;gap:4px;flex-wrap:wrap;justify-content:center;max-width:calc(100vw - 32px)}
+#views button{font:600 13px var(--display);color:var(--fg);background:transparent;border:1px solid transparent;border-radius:7px;padding:10px 12px;min-height:44px;cursor:pointer}
+#views button:hover{background:rgba(243,236,226,.08)}
+#views button[aria-pressed="true"]{background:var(--accent);color:#1b1408}
+#views button:focus-visible,#help button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#mapbox{top:calc(16px + env(safe-area-inset-top,0px));right:16px;padding:8px;display:flex;flex-direction:column;gap:6px;align-items:center}
+#map{width:150px;height:150px}
+#where{font-family:var(--mono);font-size:11px;color:var(--muted)}
+#help{bottom:calc(88px + env(safe-area-inset-bottom,0px));left:16px;padding:10px 12px;font-family:var(--mono);font-size:11px;line-height:1.6;color:var(--muted);display:flex;gap:10px;align-items:flex-start}
+#help b{color:var(--fg);font-weight:500}
+#help button{background:none;border:0;color:var(--muted);font:inherit;cursor:pointer;padding:0 2px;min-width:24px;min-height:24px}
+#joy{position:fixed;z-index:3;left:24px;bottom:calc(96px + env(safe-area-inset-bottom,0px));width:120px;height:120px;border-radius:50%;border:1px solid var(--line);background:rgba(20,17,14,.45);display:none;touch-action:none}
+#joy i{position:absolute;left:50%;top:50%;width:48px;height:48px;margin:-24px 0 0 -24px;border-radius:50%;background:rgba(242,181,68,.85)}
+@media (pointer:coarse){#joy{display:block}#help{display:none}}
+@media (max-width:640px){#title{max-width:calc(100vw - 32px - 130px)}#title p{display:none}#map{width:96px;height:96px}#views button{padding:8px 9px;font-size:12px}}
+#loading[hidden]{display:none}
+#loading{position:fixed;inset:0;display:grid;place-items:center;font-family:var(--mono);font-size:13px;color:var(--muted);z-index:1}
+</style>
+
+</head>
+<body>
+<div id="loading">Carico la sala…</div>
+<div id="stage" aria-label="Scena 3D navigabile del ristorante"></div>
+
+<div id="title" class="hud">
+  <div class="eyebrow">CONCEPT · PERCORSO 3D</div>
+  <h1>Ristorante circolare</h1>
+  <p>Cammina nella sala: la cucina in vetrata è al centro, le porte scorrevoli si aprono quando ti avvicini.</p>
+  <div class="eyebrow" style="color:var(--accent)">CONCEPT INDICATIVO · MISURE DA DEFINIRE</div>
+</div>
+
+<div id="mapbox" class="hud">
+  <canvas id="map" width="300" height="300" aria-label="Mini mappa"></canvas>
+  <div id="where">Ingresso</div>
+</div>
+
+<div id="help" class="hud" role="note">
+  <div><b>W A S D</b> o frecce per camminare<br><b>Trascina</b> per guardarti intorno<br><b>Shift</b> per andare più veloce</div>
+  <button type="button" id="helpClose" aria-label="Chiudi aiuto">×</button>
+</div>
+
+<div id="joy" aria-label="Joystick di movimento"><i></i></div>
+
+<nav id="views" class="hud" aria-label="Punti di vista">
+  <button type="button" data-v="ingresso" aria-pressed="true">Ingresso</button>
+  <button type="button" data-v="grande" aria-pressed="false">Tavolo grande</button>
+  <button type="button" data-v="piccolo" aria-pressed="false">Tavolo piccolo</button>
+  <button type="button" data-v="cucina" aria-pressed="false">In cucina</button>
+  <button type="button" data-v="alto" aria-pressed="false">Dall'alto</button>
+</nav>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+const T = THREE;
+// ---------- misure (metri, ipotesi di studio) ----------
+const ROOM_R = 11.2, H = 3.6, K_R = 3.8, K_H = 3.0;
+const SMALL_R = 5.8, BIG_R = 9.4;
+const SMALL_ANG = [...Array(10)].map((_,k)=>18+36*k);
+const BIG_ANG = [36,72,108,144,216,252,288,324];
+const rad = d => d*Math.PI/180;
+const polar = (r,deg) => ({x: r*Math.sin(rad(deg)), z: -r*Math.cos(rad(deg))}); // 0° = nord (ingresso)
+
+// ---------- renderer ----------
+const stage = document.getElementById('stage');
+const renderer = new T.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 1.75));
+renderer.outputEncoding = T.sRGBEncoding;
+renderer.toneMapping = T.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+stage.appendChild(renderer.domElement);
+const scene = new T.Scene();
+scene.background = new T.Color(0x0b0907);
+const camera = new T.PerspectiveCamera(70, 1, 0.05, 200);
+camera.rotation.order = 'YXZ';
+
+// ---------- texture procedurali ----------
+function canvasTex(w,h,draw,rep){
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  draw(c.getContext('2d'),w,h);
+  const t=new T.CanvasTexture(c); t.encoding=T.sRGBEncoding;
+  t.wrapS=t.wrapT=T.RepeatWrapping; if(rep) t.repeat.set(rep[0],rep[1]);
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return t;
+}
+const woodTex = canvasTex(512,512,(g,w,h)=>{
+  g.fillStyle='#5b3d27'; g.fillRect(0,0,w,h);
+  const rows=8, ph=h/rows;
+  for(let r=0;r<rows;r++){
+    let x = (r%2)*-90;
+    while(x<w){
+      const len=180+Math.random()*140;
+      const l=40+Math.random()*14;
+      g.fillStyle=`hsl(${24+Math.random()*6},${38+Math.random()*10}%,${l*0.62}%)`;
+      g.fillRect(x+1,r*ph+1,len-2,ph-2);
+      for(let i=0;i<14;i++){g.strokeStyle=`rgba(30,18,10,${Math.random()*.18})`;g.beginPath();const yy=r*ph+Math.random()*ph;g.moveTo(x,yy);g.lineTo(x+len,yy+Math.random()*4-2);g.stroke();}
+      x+=len;
+    }
+  }
+},[7,7]);
+const tileTex = canvasTex(256,256,(g,w,h)=>{
+  g.fillStyle='#c9cdcc'; g.fillRect(0,0,w,h);
+  g.strokeStyle='#9da3a3'; g.lineWidth=3;
+  for(let i=0;i<=4;i++){g.beginPath();g.moveTo(i*w/4,0);g.lineTo(i*w/4,h);g.stroke();g.beginPath();g.moveTo(0,i*h/4);g.lineTo(w,i*h/4);g.stroke();}
+},[4,4]);
+const plasterTex = canvasTex(256,256,(g,w,h)=>{
+  g.fillStyle='#4a362a'; g.fillRect(0,0,w,h);
+  for(let i=0;i<2500;i++){g.fillStyle=`rgba(${Math.random()<.5?255:0},${Math.random()<.5?220:0},180,${Math.random()*.04})`;g.fillRect(Math.random()*w,Math.random()*h,2,2);}
+},[10,1]);
+
+// ---------- materiali ----------
+const M = {
+  wood: new T.MeshStandardMaterial({map:woodTex, roughness:.62, metalness:0}),
+  wall: new T.MeshStandardMaterial({map:plasterTex, roughness:.95, side:T.BackSide}),
+  ceil: new T.MeshStandardMaterial({color:0x17120f, roughness:1, side:T.DoubleSide}),
+  tile: new T.MeshStandardMaterial({map:tileTex, roughness:.4}),
+  steel: new T.MeshStandardMaterial({color:0xb9c0c4, roughness:.28, metalness:.85}),
+  steelDark: new T.MeshStandardMaterial({color:0x5d6468, roughness:.35, metalness:.8}),
+  glass: new T.MeshStandardMaterial({color:0xbfe6f2, roughness:.05, metalness:.1, transparent:true, opacity:.14, side:T.DoubleSide, depthWrite:false}),
+  frame: new T.MeshStandardMaterial({color:0x22262a, roughness:.4, metalness:.7}),
+  linen: new T.MeshStandardMaterial({color:0xf3ebdd, roughness:.85}),
+  tableWood: new T.MeshStandardMaterial({color:0x2c1e15, roughness:.5}),
+  chair: new T.MeshStandardMaterial({color:0x6b4a33, roughness:.7}),
+  seat: new T.MeshStandardMaterial({color:0x8a3b2c, roughness:.9}),
+  brass: new T.MeshStandardMaterial({color:0xc9973f, roughness:.3, metalness:.9, side:T.DoubleSide}),
+  bulb: new T.MeshStandardMaterial({color:0xffe2a8, emissive:0xffc66b, emissiveIntensity:2.4}),
+  cable: new T.MeshBasicMaterial({color:0x2b2520}),
+  door: new T.MeshStandardMaterial({color:0x3a2a1f, roughness:.6}),
+  entry: new T.MeshStandardMaterial({color:0x2a3a40, emissive:0xffcf8a, emissiveIntensity:.35, roughness:.1, metalness:.3}),
+  burner: new T.MeshStandardMaterial({color:0x1a1a1a, roughness:.6}),
+  flame: new T.MeshStandardMaterial({color:0x4fb3ff, emissive:0x3a8cff, emissiveIntensity:2}),
+  stripe: new T.MeshStandardMaterial({color:0xffffff, emissive:0xe8f6ff, emissiveIntensity:1.6})
+};
+
+// ---------- luci ----------
+scene.add(new T.HemisphereLight(0xffe2c0, 0x1e150e, 0.28));
+const kLight1 = new T.PointLight(0xeef8ff, 1.6, 10, 2); kLight1.position.set(0,2.8,-1.2); scene.add(kLight1);
+const kLight2 = new T.PointLight(0xeef8ff, 1.6, 10, 2); kLight2.position.set(0,2.8,1.2); scene.add(kLight2);
+const spill = new T.PointLight(0xffd9a0, 0.8, 6, 2); spill.position.set(0,2.6,-10.4); scene.add(spill);
+
+// ---------- sala ----------
+const floor = new T.Mesh(new T.CircleGeometry(ROOM_R,96), M.wood);
+floor.rotation.x = -Math.PI/2; scene.add(floor);
+const wall = new T.Mesh(new T.CylinderGeometry(ROOM_R,ROOM_R,H,128,1,true), M.wall);
+wall.position.y = H/2; scene.add(wall);
+const ceiling = new T.Mesh(new T.CircleGeometry(ROOM_R,96), M.ceil);
+ceiling.rotation.x = Math.PI/2; ceiling.position.y = H; scene.add(ceiling);
+// zoccolo
+const base = new T.Mesh(new T.CylinderGeometry(ROOM_R-0.02,ROOM_R-0.02,0.12,128,1,true), new T.MeshStandardMaterial({color:0x1c1410,side:T.BackSide}));
+base.position.y=0.06; scene.add(base);
+
+function label(text, size){
+  const c=document.createElement('canvas'); c.width=512; c.height=128;
+  const g=c.getContext('2d'); g.font='600 54px Manrope, system-ui, sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+  g.fillStyle='rgba(15,13,11,.6)'; const w=g.measureText(text).width+60; g.fillRect(256-w/2,24,w,80);
+  g.fillStyle='#f3ece2'; g.fillText(text,256,66);
+  const t=new T.CanvasTexture(c); t.encoding=T.sRGBEncoding;
+  const s=new T.Sprite(new T.SpriteMaterial({map:t, depthWrite:false, transparent:true}));
+  s.scale.set(size||1.6,(size||1.6)/4,1); return s;
+}
+function onWall(mesh, deg, y, inset){
+  const p=polar(ROOM_R-(inset||0.04),deg); mesh.position.set(p.x,y,p.z); mesh.lookAt(0,y,0); scene.add(mesh); return mesh;
+}
+// ingresso (vetrata calda) + bagni + lavaggio, tutti fuori dal cerchio
+const entryG = new T.Group();
+entryG.add(new T.Mesh(new T.BoxGeometry(1.9,2.6,0.06), M.frame));
+const ep = new T.Mesh(new T.BoxGeometry(1.7,2.45,0.04), M.entry); ep.position.z=0.03; entryG.add(ep);
+const emid = new T.Mesh(new T.BoxGeometry(0.04,2.45,0.05), M.frame); emid.position.z=0.05; entryG.add(emid);
+onWall(entryG,0,1.3);
+[[-14,'BAGNI'],[14,'LAVAGGIO']].forEach(([d,txt])=>{
+  const g=new T.Group();
+  g.add(new T.Mesh(new T.BoxGeometry(1.05,2.2,0.06), M.frame));
+  const p=new T.Mesh(new T.BoxGeometry(0.92,2.1,0.05), M.door); p.position.z=0.03; g.add(p);
+  const h=new T.Mesh(new T.BoxGeometry(0.03,0.3,0.05), M.brass); h.position.set(0.35,0,0.07); g.add(h);
+  onWall(g,d,1.1);
+  const l=label(txt,1.4); const q=polar(ROOM_R-0.3,d); l.position.set(q.x,2.55,q.z); scene.add(l);
+});
+{ const l=label('INGRESSO',1.8); const q=polar(ROOM_R-0.3,0); l.position.set(q.x,2.95,q.z); scene.add(l); }
+
+// ---------- cucina in vetrata ----------
+const kitchen = new T.Group(); scene.add(kitchen);
+const kFloor = new T.Mesh(new T.CircleGeometry(K_R,72), M.tile); kFloor.rotation.x=-Math.PI/2; kFloor.position.y=0.005; kitchen.add(kFloor);
+const GAP = 0.125; // mezza apertura porta in radianti (≈0.95 m)
+// CylinderGeometry: theta 0 = +z (sud), PI = -z (nord)
+[[GAP, Math.PI-2*GAP],[Math.PI+GAP, Math.PI-2*GAP]].forEach(([s,l])=>{
+  const g=new T.Mesh(new T.CylinderGeometry(K_R,K_R,K_H,96,1,true,s,l), M.glass); g.position.y=K_H/2; g.renderOrder=2; kitchen.add(g);
+});
+// telaio: anelli + montanti
+[0.02,K_H].forEach(y=>{const r=new T.Mesh(new T.TorusGeometry(K_R,0.035,8,128),M.frame); r.rotation.x=Math.PI/2; r.position.y=y; kitchen.add(r);});
+const ringLight = new T.Mesh(new T.TorusGeometry(K_R-0.12,0.02,6,128),M.stripe); ringLight.rotation.x=Math.PI/2; ringLight.position.y=K_H-0.05; kitchen.add(ringLight);
+for(let d=0; d<360; d+=12){
+  if(Math.abs(((d+180)%360)-180)<10 || Math.abs(d-180)<10) continue;
+  const p=polar(K_R,d); const m=new T.Mesh(new T.BoxGeometry(0.04,K_H,0.04),M.frame); m.position.set(p.x,K_H/2,p.z); kitchen.add(m);
+}
+// soffitto cucina (controsoffitto) sopra la vetrata fino al soffitto sala
+const kTop = new T.Mesh(new T.CylinderGeometry(K_R,K_R,H-K_H,96,1,true), new T.MeshStandardMaterial({color:0x1d1916, roughness:.8, side:T.DoubleSide}));
+kTop.position.y = K_H+(H-K_H)/2; kitchen.add(kTop);
+// porte scorrevoli
+function slidingDoor(zSign){
+  const g=new T.Group();
+  const panel=new T.Mesh(new T.BoxGeometry(1.0,K_H-0.1,0.03), M.glass); panel.renderOrder=3;
+  const edge=new T.Mesh(new T.BoxGeometry(1.0,0.05,0.04), M.frame); edge.position.y=(K_H-0.1)/2;
+  const handle=new T.Mesh(new T.BoxGeometry(0.03,0.6,0.05), M.steel); handle.position.set(-0.42,0,0.03*zSign);
+  g.add(panel,edge,handle);
+  g.position.set(0,K_H/2,zSign*(K_R+0.06));
+  kitchen.add(g);
+  return {g, open:0, zSign};
+}
+const doors=[slidingDoor(-1), slidingDoor(1)];
+// banchi
+function box(w,h,d,mat,x,y,z,parent){const m=new T.Mesh(new T.BoxGeometry(w,h,d),mat); m.position.set(x,y,z); (parent||kitchen).add(m); return m;}
+[-1,1].forEach(s=>{
+  box(4.6,0.86,0.8,M.steelDark,0,0.43,s*2.6);
+  box(4.66,0.04,0.86,M.steel,0,0.88,s*2.6);
+  // mensola pass
+  box(4.4,0.03,0.35,M.steel,0,1.45,s*2.6);
+  for(let i=-2;i<=2;i++){box(0.02,0.55,0.02,M.steel,i*1.05,1.18,s*2.6+0.12*s);}
+});
+// piatti sul pass
+for(let i=0;i<6;i++){const p=new T.Mesh(new T.CylinderGeometry(0.13,0.1,0.02,24),M.linen); p.position.set(-1.6+i*0.62,1.475,-2.6); kitchen.add(p);}
+// isola
+box(2.5,0.86,1.8,M.steelDark,0,0.43,0);
+box(2.56,0.04,1.86,M.steel,0,0.88,0);
+[[-0.75,-0.4],[-0.75,0.4],[0,-0.4],[0,0.4]].forEach(([x,z])=>{
+  const b=new T.Mesh(new T.CylinderGeometry(0.17,0.17,0.03,24),M.burner); b.position.set(x,0.915,z); kitchen.add(b);
+  const f=new T.Mesh(new T.TorusGeometry(0.09,0.012,6,24),M.flame); f.rotation.x=Math.PI/2; f.position.set(x,0.935,z); kitchen.add(f);
+});
+box(0.8,0.04,1.4,M.tableWood,0.75,0.92,0); // tagliere
+// pentole
+[[-0.75,-0.4,0.16],[0,0.4,0.13]].forEach(([x,z,r])=>{const p=new T.Mesh(new T.CylinderGeometry(r,r,0.22,24,1,true),M.steel); p.position.set(x,1.05,z); kitchen.add(p);});
+// cappa
+box(2.9,0.5,2.2,M.steel,0,2.45,0);
+box(0.5,H-2.7,0.5,M.steel,0,2.7+(H-2.7)/2,0);
+const hoodLight=new T.Mesh(new T.PlaneGeometry(2.4,1.7),M.stripe); hoodLight.rotation.x=Math.PI/2; hoodLight.position.y=2.195; kitchen.add(hoodLight);
+
+// ---------- tavoli, sedie, lampadari ----------
+const obstacles=[]; // {x,z,r}
+function chair(x,z,lookX,lookZ,parent){
+  const g=new T.Group();
+  const seat=new T.Mesh(new T.BoxGeometry(0.44,0.06,0.42),M.seat); seat.position.y=0.46; g.add(seat);
+  const back=new T.Mesh(new T.BoxGeometry(0.44,0.42,0.04),M.chair); back.position.set(0,0.7,-0.2); g.add(back);
+  [[-0.19,-0.18],[0.19,-0.18],[-0.19,0.18],[0.19,0.18]].forEach(([a,b])=>{const l=new T.Mesh(new T.CylinderGeometry(0.018,0.018,0.46,6),M.chair); l.position.set(a,0.23,b); g.add(l);});
+  g.position.set(x,0,z); g.lookAt(lookX,0,lookZ); scene.add(g);
+}
+function pendant(x,z,lowY){
+  const cableLen=H-lowY-0.2;
+  const c=new T.Mesh(new T.CylinderGeometry(0.005,0.005,cableLen,4),M.cable); c.position.set(x,lowY+0.2+cableLen/2,z); scene.add(c);
+  const shade=new T.Mesh(new T.ConeGeometry(0.16,0.2,32,1,true),M.brass); shade.position.set(x,lowY+0.1,z); scene.add(shade);
+  const b=new T.Mesh(new T.SphereGeometry(0.045,16,12),M.bulb); b.position.set(x,lowY+0.02,z); scene.add(b);
+  const L=new T.PointLight(0xffb468, 1.25, 3.6, 2); L.position.set(x,lowY-0.05,z); scene.add(L);
+}
+function table(x,z,r,glasses){
+  const top=new T.Mesh(new T.CylinderGeometry(r,r,0.04,48),M.tableWood); top.position.set(x,0.75,z); scene.add(top);
+  const cloth=new T.Mesh(new T.CylinderGeometry(r*0.55,r*0.55,0.005,32),M.linen); cloth.position.set(x,0.773,z); scene.add(cloth);
+  const leg=new T.Mesh(new T.CylinderGeometry(0.05,0.05,0.73,12),M.frame); leg.position.set(x,0.365,z); scene.add(leg);
+  const foot=new T.Mesh(new T.CylinderGeometry(r*0.45,r*0.5,0.03,32),M.frame); foot.position.set(x,0.015,z); scene.add(foot);
+  for(let i=0;i<glasses;i++){
+    const a=i/glasses*Math.PI*2; const gx=x+Math.cos(a)*r*0.72, gz=z+Math.sin(a)*r*0.72;
+    const gl=new T.Mesh(new T.CylinderGeometry(0.035,0.025,0.12,12,1,true),M.glass); gl.position.set(gx,0.83,gz); scene.add(gl);
+    const pl=new T.Mesh(new T.CylinderGeometry(0.12,0.09,0.015,24),M.linen); pl.position.set(x+Math.cos(a+0.25)*r*0.6,0.78,z+Math.sin(a+0.25)*r*0.6); scene.add(pl);
+  }
+}
+const tables=[];
+SMALL_ANG.forEach(d=>{
+  const p=polar(SMALL_R,d); table(p.x,p.z,0.4,2); pendant(p.x,p.z,1.55);
+  // 2 sedute sul lato esterno, rivolte verso la cucina
+  const out=polar(SMALL_R+0.62,d); const tx=Math.cos(rad(d)), tz=Math.sin(rad(d)); // tangente
+  [-0.3,0.3].forEach(o=>chair(out.x+tx*o,out.z+tz*o,0,0));
+  obstacles.push({x:p.x,z:p.z,r:0.55},{x:out.x,z:out.z,r:0.55});
+  tables.push({x:p.x,z:p.z,type:'s',d});
+});
+BIG_ANG.forEach(d=>{
+  const p=polar(BIG_R,d); table(p.x,p.z,0.8,6); pendant(p.x,p.z,1.6);
+  for(let i=0;i<6;i++){const a=i/6*Math.PI*2+rad(d); chair(p.x+Math.cos(a)*1.12,p.z+Math.sin(a)*1.12,p.x,p.z);}
+  obstacles.push({x:p.x,z:p.z,r:1.45});
+  tables.push({x:p.x,z:p.z,type:'b',d});
+});
+
+// ---------- controlli ----------
+const player={x:0,z:-10.1,y:1.65,yaw:Math.PI,pitch:-0.04};
+let mode='walk', orbitA=0.6, orbitAuto=true, targetEye=1.65;
+const keys={};
+function blocked(x,z){
+  const r=Math.hypot(x,z);
+  if(r>ROOM_R-0.45) return true;
+  if(r>K_R-0.3 && r<K_R+0.3){
+    const nearDoor = Math.abs(x)<0.42 && doors[z<0?0:1].open>0.7;
+    if(!nearDoor) return true;
+  }
+  if(r<K_R){
+    if(Math.abs(x)<2.3+0.25 && Math.abs(Math.abs(z)-2.6)<0.4+0.25) return true;
+    if(Math.abs(x)<1.25+0.25 && Math.abs(z)<0.9+0.25) return true;
+    return false;
+  }
+  for(const o of obstacles){ if(Math.hypot(x-o.x,z-o.z)<o.r) return true; }
+  return false;
+}
+window.addEventListener('keydown',e=>{ if(e.target.closest && e.target.closest('button')) {if(!['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) return;} keys[e.code]=true; if(e.code.startsWith('Arrow')) e.preventDefault(); if(mode!=='walk' && /Key[WASD]|Arrow/.test(e.code)) setView('ingresso-keep'); });
+window.addEventListener('keyup',e=>{ keys[e.code]=false; });
+window.addEventListener('blur',()=>{ for(const k in keys) keys[k]=false; });
+
+// trascina per guardare
+let drag=null;
+stage.addEventListener('pointerdown',e=>{ drag={id:e.pointerId,x:e.clientX,y:e.clientY}; stage.setPointerCapture(e.pointerId); if(mode==='orbit') orbitAuto=false; });
+stage.addEventListener('pointermove',e=>{
+  if(!drag||drag.id!==e.pointerId) return;
+  const dx=e.clientX-drag.x, dy=e.clientY-drag.y; drag.x=e.clientX; drag.y=e.clientY;
+  if(mode==='walk'){ player.yaw+=dx*0.0042; player.pitch=Math.max(-1.2,Math.min(1.2,player.pitch+dy*0.0035)); }
+  else { orbitA-=dx*0.006; }
+});
+const endDrag=e=>{ if(drag&&drag.id===e.pointerId) drag=null; };
+stage.addEventListener('pointerup',endDrag); stage.addEventListener('pointercancel',endDrag);
+stage.addEventListener('wheel',e=>{ if(mode==='walk'){ const s=-Math.sign(e.deltaY)*0.6; move(s,0); } e.preventDefault(); },{passive:false});
+
+// joystick
+const joy=document.getElementById('joy'), knob=joy.querySelector('i'); let jv={x:0,y:0}, jid=null;
+function joyMove(e){ const r=joy.getBoundingClientRect(); let dx=e.clientX-(r.left+r.width/2), dy=e.clientY-(r.top+r.height/2); const m=Math.hypot(dx,dy), max=44; if(m>max){dx*=max/m;dy*=max/m;} jv={x:dx/max,y:dy/max}; knob.style.transform=`translate(${dx}px,${dy}px)`; }
+joy.addEventListener('pointerdown',e=>{ jid=e.pointerId; joy.setPointerCapture(jid); if(mode!=='walk') setView('ingresso-keep'); joyMove(e); e.stopPropagation(); });
+joy.addEventListener('pointermove',e=>{ if(e.pointerId===jid) joyMove(e); });
+const joyEnd=e=>{ if(e.pointerId===jid){ jid=null; jv={x:0,y:0}; knob.style.transform=''; } };
+joy.addEventListener('pointerup',joyEnd); joy.addEventListener('pointercancel',joyEnd);
+
+function move(fwd,str){
+  const fx=-Math.sin(player.yaw), fz=-Math.cos(player.yaw), rx=Math.cos(player.yaw), rz=-Math.sin(player.yaw);
+  const dx=fx*fwd+rx*str, dz=fz*fwd+rz*str;
+  if(blocked(player.x,player.z) && Math.hypot(player.x+dx,player.z+dz)<ROOM_R-0.45){ player.x+=dx; player.z+=dz; return; } // seduto: puoi sempre alzarti
+  if(!blocked(player.x+dx,player.z)) player.x+=dx;
+  if(!blocked(player.x,player.z+dz)) player.z+=dz;
+}
+
+// ---------- punti di vista ----------
+function seatView(d,r){ const p=polar(r,d); return {x:p.x,z:p.z,yaw:Math.atan2(p.x,p.z),pitch:-0.18,eye:1.22}; }
+const VIEWS={
+  ingresso:{x:0,z:-10.1,yaw:Math.PI,pitch:-0.04,eye:1.65},
+  grande:seatView(144,BIG_R+1.12),
+  piccolo:seatView(162,SMALL_R+0.8),
+  cucina:{x:1.6,z:1.65,yaw:Math.atan2(1.6,1.65)+0.35,pitch:-0.12,eye:1.7}
+};
+const btns=[...document.querySelectorAll('#views button')];
+function setView(v){
+  const keep = v==='ingresso-keep';
+  btns.forEach(b=>b.setAttribute('aria-pressed', String(b.dataset.v===v)));
+  if(v==='alto'){ mode='orbit'; orbitAuto=true; ceiling.visible=false; kTop.visible=false; return; }
+  mode='walk'; ceiling.visible=true; kTop.visible=true;
+  if(keep) return;
+  const t=VIEWS[v]; player.x=t.x; player.z=t.z; player.yaw=t.yaw; player.pitch=t.pitch; targetEye=t.eye; player.y=t.eye;
+}
+btns.forEach(b=>b.addEventListener('click',()=>setView(b.dataset.v)));
+document.getElementById('helpClose').addEventListener('click',()=>{document.getElementById('help').hidden=true;});
+
+// ---------- mini mappa ----------
+const map=document.getElementById('map'), mg=map.getContext('2d'), where=document.getElementById('where');
+function drawMap(){
+  const W=map.width, s=W/2/(ROOM_R+0.6);
+  mg.clearRect(0,0,W,W); mg.save(); mg.translate(W/2,W/2);
+  mg.fillStyle='rgba(91,61,39,.55)'; mg.strokeStyle='#f3ece2'; mg.lineWidth=3;
+  mg.beginPath(); mg.arc(0,0,ROOM_R*s,0,Math.PI*2); mg.fill(); mg.stroke();
+  mg.fillStyle='rgba(159,208,223,.35)'; mg.strokeStyle='#9fd0df'; mg.lineWidth=2.5;
+  mg.beginPath(); mg.arc(0,0,K_R*s,0,Math.PI*2); mg.fill(); mg.stroke();
+  mg.fillStyle='#f3ece2';
+  tables.forEach(t=>{ mg.beginPath(); mg.arc(t.x*s,t.z*s,(t.type==='b'?0.8:0.4)*s,0,Math.PI*2); mg.fill(); });
+  mg.fillStyle='#f2b544'; mg.fillRect(-0.9*s,(-ROOM_R-0.3)*s,1.8*s,0.6*s);
+  if(mode==='walk'){
+    mg.translate(player.x*s,player.z*s); mg.rotate(-player.yaw);
+    mg.fillStyle='#f2b544'; mg.beginPath(); mg.moveTo(0,-11); mg.lineTo(7,7); mg.lineTo(0,3); mg.lineTo(-7,7); mg.closePath(); mg.fill();
+  }
+  mg.restore();
+}
+function zoneName(){
+  if(mode!=='walk') return 'Vista dall’alto';
+  const r=Math.hypot(player.x,player.z);
+  if(r<K_R) return 'Dentro la cucina';
+  if(r>ROOM_R-1.6 && Math.abs(player.x)<2.5 && player.z<0) return 'Ingresso';
+  if(r<SMALL_R+1.2) return 'Anello tavoli piccoli';
+  return 'Anello tavoli grandi';
+}
+
+// ---------- loop ----------
+function resize(){ const w=window.innerWidth,h=window.innerHeight; renderer.setSize(w,h); camera.aspect=w/h; camera.fov = w<h ? 82 : 70; camera.updateProjectionMatrix(); }
+window.addEventListener('resize',resize); resize();
+const clock=new T.Clock(); let mapTick=0;
+function frame(){
+  const dt=Math.min(clock.getDelta(),0.05);
+  if(mode==='walk'){
+    let f=0,s=0;
+    if(keys.KeyW||keys.ArrowUp) f+=1; if(keys.KeyS||keys.ArrowDown) f-=1;
+    if(keys.KeyD) s+=1; if(keys.KeyA) s-=1;
+    if(keys.ArrowLeft) player.yaw+=1.8*dt; if(keys.ArrowRight) player.yaw-=1.8*dt;
+    f-=jv.y; s+=jv.x;
+    const speed=(keys.ShiftLeft||keys.ShiftRight?3.4:1.7)*dt;
+    const m=Math.hypot(f,s); if(m>1){f/=m;s/=m;}
+    if(f||s){ move(f*speed,s*speed); targetEye=1.65; }
+    player.y += (targetEye-player.y)*Math.min(1,dt*3);
+    camera.position.set(player.x,player.y,player.z);
+    camera.rotation.set(player.pitch,player.yaw,0);
+  } else {
+    if(orbitAuto) orbitA+=dt*0.12;
+    camera.position.set(Math.sin(orbitA)*15, 17, Math.cos(orbitA)*15);
+    camera.lookAt(0,0,0);
+  }
+  // porte scorrevoli: si aprono se sei vicino
+  doors.forEach(d=>{
+    const dz=d.zSign*K_R; const near = mode==='walk' && Math.hypot(player.x, player.z-dz)<2.4;
+    d.open += ((near?1:0)-d.open)*Math.min(1,dt*4);
+    d.g.position.x = d.open*1.0;
+  });
+  renderer.render(scene,camera);
+  if((mapTick=(mapTick+1)%3)===0){ drawMap(); where.textContent=zoneName(); }
+  requestAnimationFrame(frame);
+}
+document.getElementById('loading').hidden=true;
+setView('ingresso');
+frame();
+})();
+</script>
+
+</body>
+</html>
